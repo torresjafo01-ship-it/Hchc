@@ -1,0 +1,525 @@
+if _G.JAF_LoadOptRan then
+	return
+end
+_G.JAF_LoadOptRan = true
+
+local CoreGui = game:GetService("CoreGui")
+local ReplicatedFirst = game:GetService("ReplicatedFirst")
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
+
+local START = os.clock()
+
+local BASELINE_FILE = "dawgopt_off.txt"
+
+local function fileExists(name)
+	local ok, res = pcall(function()
+		return isfile(name)
+	end)
+	return ok and res == true
+end
+
+local BASELINE = fileExists(BASELINE_FILE)
+
+local OPT_ON = (_G.JAF_LoadOpt ~= false) and not BASELINE
+local HARSH_ON = (_G.JAF_LoadOptHarsh ~= false) and not BASELINE
+local FLAGS_ON = (_G.JAF_LoadOptFlags ~= false) and not BASELINE
+local COREGUI_ON = (_G.JAF_LoadOptCoreGui ~= false) and not BASELINE
+local KEEP_COREGUI_HIDDEN = _G.JAF_LoadOptKeepCoreGuiHidden == true
+local METER_HOLD = tonumber(_G.JAF_LoadOptMeterHold) or 6
+
+_G.JAF_LoadOptActive = not BASELINE
+
+local LATE = false
+do
+	local lp = Players.LocalPlayer
+	if game:IsLoaded() and lp and lp.Character then
+		LATE = true
+	end
+end
+
+_G.JAF_LoadOptBaseline = function(on)
+	if on == false then
+		pcall(function()
+			delfile(BASELINE_FILE)
+		end)
+		print("[DawgOpt] baseline OFF -- optimizer runs on next join")
+	else
+		pcall(function()
+			writefile(BASELINE_FILE, "1")
+		end)
+		print("[DawgOpt] baseline ON -- optimizer disabled on next join, timer still runs")
+	end
+end
+
+local setF = rawget(getgenv and getgenv() or _G, "setfflag") or rawget(_G, "set_fflag")
+local getF = rawget(getgenv and getgenv() or _G, "getfflag") or rawget(_G, "get_fflag")
+if type(setF) ~= "function" then
+	setF = nil
+end
+if type(getF) ~= "function" then
+	getF = nil
+end
+
+local flagSeen = {}
+local flagSet, flagDead = 0, 0
+
+local function applyFlag(name, value)
+	if not setF then
+		return false
+	end
+	if getF then
+		local ok, cur = pcall(getF, name)
+		if not ok or cur == nil then
+			if not flagSeen[name] then
+				flagSeen[name] = true
+				flagDead += 1
+			end
+			return false
+		end
+	end
+	if pcall(setF, name, tostring(value)) then
+		if not flagSeen[name] then
+			flagSeen[name] = true
+			flagSet += 1
+		end
+		return true
+	end
+	return false
+end
+
+local FLAGS = {
+	{ "DFIntClusterSenderMaxJoinBandwidthBps", "2100000000" },
+	{ "DFIntClusterSenderMaxUpdateBandwidthBps", "2100000000" },
+	{ "DFIntServerFramesBetweenJoins", "1" },
+	{ "DFIntRaknetBandwidthInfluxHundredthsPercentageV2", "10000" },
+	{ "DFIntConnectionMTUSize", "1400" },
+	{ "FIntRakNetResendBufferArrayLength", "1024" },
+	{ "DFIntRakNetNakResendDelayMsMax", "1" },
+	{ "DFIntWaitOnUpdateNetworkLoopEndedMS", "100" },
+	{ "DFIntWaitOnRecvFromLoopEndedMS", "100" },
+	{ "DFIntLargePacketQueueSizeCutoffMB", "1000" },
+	{ "DFIntSendRakNetStatsInterval", "2147483647" },
+	{ "DFIntRakNetLoopMs", "1" },
+	{ "DFIntRakNetSelectTimeoutMs", "1" },
+
+	{ "DFIntNetworkClusterPacketCacheNumParallelTasks", "8" },
+	{ "DFIntReplicationDataCacheNumParallelTasks", "8" },
+	{ "DFIntMegaReplicatorNumParallelTasks", "16" },
+	{ "DFIntMegaReplicatorNetworkQualityProcessorUnit", "10" },
+	{ "DFIntMaxProcessPacketsStepsPerCyclic", "512" },
+	{ "DFIntMaxProcessPacketsStepsAccumulated", "0" },
+	{ "DFIntMaxProcessPacketsJobScaling", "1000" },
+	{ "DFIntClientPacketMaxFrameMicroseconds", "200000" },
+	{ "DFIntClientPacketExcessMicroseconds", "10000" },
+	{ "DFIntClientPacketMinMicroseconds", "1" },
+	{ "DFIntClientPacketMaxDelayMs", "1" },
+	{ "DFIntMaxWaitTimeBeforeForcePacketProcessMS", "1" },
+	{ "DFIntMaxFrameBufferSize", "4" },
+	{ "DFIntBufferCompressionThreshold", "100" },
+	{ "DFIntOverrideISRReplicatorStepBandwidthBytes", "131072" },
+
+	{ "DFIntTaskSchedulerTargetFps", "9999" },
+	{ "DFIntTaskSchedulerJobInitThreads", "8" },
+	{ "DFIntTaskSchedulerJobInGameThreads", "8" },
+	{ "FIntTaskSchedulerAutoThreadLimit", "16" },
+	{ "FIntTaskSchedulerAsyncTasksMinimumThreadCount", "4" },
+	{ "DFIntRuntimeConcurrency", "16" },
+	{ "FIntSimWorldTaskQueueParallelTasks", "20" },
+
+	{ "DFIntHttpBatchLimit", "256" },
+	{ "FIntHttpBatchLimit", "256" },
+	{ "DFIntHttpCurlConnectionCacheSize", "512" },
+	{ "FIntDefaultMeshCacheSizeMB", "512" },
+	{ "DFIntMemCacheMaxCapacityMB", "256" },
+	{ "DFIntNumAssetsMaxToPreload", "1" },
+	{ "DFFlagEnableSoundPreloading", "false" },
+	{ "FFlagSlimContentProvider", "true" },
+	{ "DFFlagDebugSkipMeshVoxelizer", "true" },
+
+	{ "DFFlagTextureQualityOverrideEnabled", "true" },
+	{ "DFIntTextureQualityOverride", "0" },
+	{ "FIntDebugTextureManagerSkipMips", "7" },
+	{ "DFIntDebugLimitMinTextureResolutionWhenSkipMips", "8" },
+	{ "FFlagTM2SkipMipsForUnstreamable2", "true" },
+	{ "DFFlagDoNotSkipMipsBasedOnSystemMemoryPS", "true" },
+	{ "FFlagRenderUseTextureManager224", "false" },
+
+	{ "DFIntDebugFRMQualityLevelOverride", "1" },
+	{ "DFFlagDebugPauseVoxelizer", "true" },
+	{ "FFlagFastGPULightCulling3", "true" },
+	{ "FIntRenderLocalLightFadeInMs", "0" },
+	{ "FIntRenderLocalLightUpdatesMax", "1" },
+	{ "FIntRenderShadowmapBias", "0" },
+	{ "FIntSSAOMipLevels", "0" },
+	{ "FIntDebugForceMSAASamples", "1" },
+	{ "FIntDebugFRMOptionalMSAALevelOverride", "0" },
+	{ "FIntRobloxGuiBlurIntensity", "0" },
+	{ "FIntFRMMinGrassDistance", "0" },
+	{ "FIntFRMMaxGrassDistance", "0" },
+
+	{ "DFFlagCoreScriptTelemetry2", "false" },
+	{ "DFFlagBrowserTrackerIdTelemetryEnabled", "false" },
+	{ "FFlagPerfDataOnTelemetryV2", "false" },
+	{ "FFlagSendRenderFidelityTelemetry2", "false" },
+	{ "FFlagEnableTelemetryServiceMemoryCPUInfo", "false" },
+	{ "DFIntTelemetryProfilerHundredthsPercentage", "0" },
+	{ "FIntTelemetryProfilerFrequency", "0" },
+	{ "FIntPerformanceTelemetryQueueProcessLimit", "0" },
+	{ "DFIntContentProviderPreloadHangTelemetryHundredthsPercentage", "0" },
+}
+
+local STARTUP_ONLY = {
+	{ "DFIntConnectionMTUSize", "1400" },
+	{ "FIntRakNetResendBufferArrayLength", "1024" },
+	{ "DFIntClusterSenderMaxJoinBandwidthBps", "2100000000" },
+	{ "FIntTaskSchedulerAutoThreadLimit", "16" },
+	{ "DFIntTaskSchedulerJobInitThreads", "8" },
+	{ "DFIntRuntimeConcurrency", "16" },
+	{ "FIntDefaultMeshCacheSizeMB", "512" },
+	{ "FIntDebugTextureManagerSkipMips", "7" },
+	{ "DFIntNumAssetsMaxToPreload", "1" },
+	{ "FFlagDebugGraphicsPreferD3D11", "True" },
+	{ "DFFlagDebugSkipMeshVoxelizer", "True" },
+}
+
+_G.JAF_LoadOptCopyStartupFlags = function()
+	local parts = {}
+	for _, f in ipairs(STARTUP_ONLY) do
+		parts[#parts + 1] = string.format('  "%s": "%s"', f[1], f[2])
+	end
+	local json = "{\n" .. table.concat(parts, ",\n") .. "\n}"
+	if type(setclipboard) == "function" then
+		pcall(setclipboard, json)
+		print("[DawgOpt] startup-only flags copied to clipboard -- paste into Bloxstrap > Engine Settings > FastFlags, then relaunch Roblox.")
+	else
+		print(json)
+	end
+	return json
+end
+
+local function applyAllFlags()
+	if not FLAGS_ON or not setF then
+		return
+	end
+	for _, f in ipairs(FLAGS) do
+		applyFlag(f[1], f[2])
+	end
+end
+
+applyAllFlags()
+
+_G.JAF_LoadOptReapply = applyAllFlags
+
+for _, delay in ipairs({ 2, 6, 12, 20 }) do
+	task.delay(delay, applyAllFlags)
+end
+
+local meter = {}
+
+do
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "DawgOptMeter"
+	gui.IgnoreGuiInset = false
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 1000
+
+	local cam = Workspace.CurrentCamera
+	local vy = (cam and cam.ViewportSize.Y) or 1080
+	if vy < 200 then
+		vy = 1080
+	end
+	local s = math.clamp(vy / 1080, 0.75, 1.6)
+	local accent = BASELINE and Color3.fromRGB(255, 176, 66) or Color3.fromRGB(96, 224, 168)
+
+	local pill = Instance.new("Frame")
+	pill.Name = "Pill"
+	pill.AnchorPoint = Vector2.new(0.5, 0)
+	pill.Position = UDim2.new(0.5, 0, 0, math.floor(8 * s))
+	pill.Size = UDim2.fromOffset(math.floor(258 * s), math.floor(44 * s))
+	pill.BackgroundColor3 = Color3.fromRGB(14, 15, 20)
+	pill.BackgroundTransparency = 0.12
+	pill.BorderSizePixel = 0
+	pill.Parent = gui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, math.floor(12 * s))
+	corner.Parent = pill
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = accent
+	stroke.Thickness = math.max(1, math.floor(1.5 * s))
+	stroke.Transparency = 0.35
+	stroke.Parent = pill
+
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.new(0, math.floor(14 * s), 0, 0)
+	title.Size = UDim2.new(0, math.floor(150 * s), 1, 0)
+	title.Font = Enum.Font.GothamBold
+	title.Text = "Dawg Optimizer"
+	title.TextSize = math.floor(15 * s)
+	title.TextColor3 = Color3.fromRGB(226, 230, 240)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextYAlignment = Enum.TextYAlignment.Center
+	title.Parent = pill
+
+	local sub = Instance.new("TextLabel")
+	sub.Name = "Sub"
+	sub.BackgroundTransparency = 1
+	sub.AnchorPoint = Vector2.new(1, 0)
+	sub.Position = UDim2.new(1, -math.floor(14 * s), 0, 0)
+	sub.Size = UDim2.new(0, math.floor(88 * s), 1, 0)
+	sub.Font = Enum.Font.GothamBold
+	sub.Text = LATE and "--" or "..."
+	sub.TextSize = math.floor(19 * s)
+	sub.TextColor3 = accent
+	sub.TextXAlignment = Enum.TextXAlignment.Right
+	sub.TextYAlignment = Enum.TextYAlignment.Center
+	sub.Parent = pill
+
+	gui.Parent = CoreGui
+
+	local pending = not LATE
+	if pending then
+		task.spawn(function()
+			local dots = 0
+			while pending do
+				dots = (dots % 3) + 1
+				sub.Text = string.rep(".", dots)
+				task.wait(0.35)
+			end
+		end)
+	end
+
+	function meter.finish(seconds)
+		pending = false
+		sub.Text = seconds and string.format("%.2fs", seconds) or "--"
+		task.delay(METER_HOLD, function()
+			local info = TweenInfo.new(0.5, Enum.EasingStyle.Quad)
+			pcall(function()
+				TweenService:Create(pill, info, { BackgroundTransparency = 1 }):Play()
+				TweenService:Create(stroke, info, { Transparency = 1 }):Play()
+				TweenService:Create(title, info, { TextTransparency = 1 }):Play()
+				TweenService:Create(sub, info, { TextTransparency = 1 }):Play()
+			end)
+			task.delay(0.6, function()
+				gui:Destroy()
+			end)
+		end)
+	end
+end
+
+local KILL_NAMES = {
+	RobloxLoadingGUI = true,
+	BackgroundScreen = true,
+	DevGUIBlackoutCurtain = true,
+}
+
+local function killIfMatch(inst)
+	if inst.Parent == CoreGui and KILL_NAMES[inst.Name] then
+		inst:Destroy()
+	end
+end
+
+local watchConn
+
+if OPT_ON then
+	for _, child in ipairs(CoreGui:GetChildren()) do
+		killIfMatch(child)
+	end
+	watchConn = CoreGui.ChildAdded:Connect(killIfMatch)
+	pcall(function()
+		ReplicatedFirst:RemoveDefaultLoadingScreen()
+	end)
+end
+
+local loadPhase = true
+
+local function permaStrip(inst)
+	if
+		inst:IsA("ParticleEmitter")
+		or inst:IsA("Trail")
+		or inst:IsA("Smoke")
+		or inst:IsA("Fire")
+		or inst:IsA("Sparkles")
+	then
+		inst.Enabled = false
+	elseif inst:IsA("PostEffect") then
+		inst.Enabled = false
+	end
+end
+
+local function harshStrip(inst)
+	if not loadPhase then
+		return
+	end
+	if inst:IsA("Decal") or inst:IsA("Texture") then
+		if inst.Transparency ~= 1 then
+			inst.Transparency = 1
+		end
+	elseif inst:IsA("BillboardGui") or inst:IsA("SurfaceGui") then
+		if inst.Enabled then
+			inst.Enabled = false
+		end
+	end
+end
+
+local function applyPermanentSettings()
+	pcall(function()
+		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+	end)
+	pcall(function()
+		UserSettings():GetService("UserGameSettings").SavedQualityLevel =
+			Enum.SavedQualitySetting.QualityLevel1
+	end)
+	pcall(function()
+		Lighting.GlobalShadows = false
+		Lighting.EnvironmentDiffuseScale = 0
+		Lighting.EnvironmentSpecularScale = 0
+	end)
+	pcall(function()
+		local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+		if atmosphere then
+			atmosphere.Density = 0
+			atmosphere.Glare = 0
+			atmosphere.Haze = 0
+		end
+	end)
+	pcall(function()
+		local terrain = Workspace:FindFirstChildOfClass("Terrain")
+		if terrain then
+			terrain.Decoration = false
+			terrain.WaterWaveSize = 0
+			terrain.WaterWaveSpeed = 0
+			terrain.WaterReflectance = 0
+			local clouds = terrain:FindFirstChildOfClass("Clouds")
+			if clouds then
+				clouds.Enabled = false
+			end
+		end
+	end)
+end
+
+local coreGuiHidden = false
+
+local function setCoreGui(on)
+	pcall(function()
+		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, on)
+	end)
+end
+
+local permaConn, lightingConn
+
+if OPT_ON then
+	applyPermanentSettings()
+
+	if COREGUI_ON then
+		coreGuiHidden = true
+		setCoreGui(false)
+	end
+
+	task.spawn(function()
+		for _, root in ipairs({ Workspace, Lighting }) do
+			local ok, list = pcall(function()
+				return root:GetDescendants()
+			end)
+			if ok then
+				local i, n = 1, #list
+				while i <= n do
+					local t0 = os.clock()
+					while i <= n and (os.clock() - t0) < 0.002 do
+						pcall(permaStrip, list[i])
+						if HARSH_ON then
+							pcall(harshStrip, list[i])
+						end
+						i += 1
+					end
+					RunService.Heartbeat:Wait()
+				end
+			end
+		end
+	end)
+
+	permaConn = Workspace.DescendantAdded:Connect(function(inst)
+		pcall(permaStrip, inst)
+		if HARSH_ON and loadPhase then
+			pcall(harshStrip, inst)
+		end
+	end)
+	lightingConn = Lighting.DescendantAdded:Connect(function(inst)
+		pcall(permaStrip, inst)
+	end)
+end
+
+local finished = false
+
+local function finish(seconds)
+	if finished then
+		return
+	end
+	finished = true
+
+	loadPhase = false
+
+	if watchConn and watchConn.Connected then
+		watchConn:Disconnect()
+	end
+
+	if coreGuiHidden and not KEEP_COREGUI_HIDDEN then
+		coreGuiHidden = false
+		setCoreGui(true)
+	end
+
+	pcall(function()
+		meter.finish(seconds)
+	end)
+
+	if seconds then
+		print(string.format("[DawgOpt] loaded in %.2fs | flags %d set, %d absent | nothing reverted%s", seconds, flagSet, flagDead, BASELINE and " | BASELINE" or ""))
+	else
+		print("[DawgOpt] load time not measurable (already in-game when the script started)")
+	end
+end
+
+_G.JAF_LoadOptStop = function()
+	if permaConn then
+		permaConn:Disconnect()
+	end
+	if lightingConn then
+		lightingConn:Disconnect()
+	end
+	finish(nil)
+end
+
+if LATE then
+	task.delay(1, function()
+		finish(nil)
+	end)
+else
+	task.spawn(function()
+		if not game:IsLoaded() then
+			game.Loaded:Wait()
+		end
+		local lp = Players.LocalPlayer
+		if not lp then
+			Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+			lp = Players.LocalPlayer
+		end
+		if lp and not lp.Character then
+			lp.CharacterAdded:Wait()
+		end
+		task.wait(0.1)
+		finish(os.clock() - START)
+	end)
+
+	task.delay(60, function()
+		finish(nil)
+	end)
+end
+print("dawgloaded")
